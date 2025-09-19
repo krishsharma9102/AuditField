@@ -1,0 +1,592 @@
+In Investocafe Scurity in spring
+==========================
+
+JWT
+====
+-> JWT contains below 3 parts
+
+		1) Header
+		2) Payload
+		3) Signature
+
+Note: JWT 3 parts will be seperated by using dot(.)
+
+token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+
+- > jwt never verify password after jwt token is create (at login time)
+- > secret key is used to create signature only 
+- > Every token is different if we use 1 secret key to create n number of token because payload is different
+- > In Jwt we verify token we use secret key this token is correct or not  
+- > We use method for verfication method internal working is extract header + payload from token and generate signature 
+    and match that signature with current token which user provide after login( payload make token different & signature is generate with
+    header and payload so every signature is different ) 
+- > Parser	Code that reads the token, checks signature, and extracts the claims.
+    Tampered Token was changed/forged after issuance, signature becomes invalid.
+- > JWT is secure because any tampering changes the signature, and the parser catches it immediately.
+
+
+1> Security Config
+   ===============
+
+SecurityFilterChain securityFilterChain 
+
+-> When is the Security Filter Chain created?
+=   At application startup:
+=   Spring Security builds the Security Filter Chain once when the application starts.
+=   It reads your SecurityConfig and creates a list of filter objects in the correct order.
+
+->  When is it executed?
+=   Every HTTP request:
+=   Spring does not rebuild the chain per request.
+=   Instead, it uses the existing chain to process the request.
+
+
+2> Jwt filter class
+   ================
+
+>> How Spring Security knows to run it
+=  Spring Boot starts your app → @Bean SecurityFilterChain is initialized.
+=  Spring Security builds a filter chain with all security filters.
+=  Your JwtAuthenticationFilter is part of this chain because of addFilterBefore().
+   Whenever a request comes in (e.g., /api/funds):
+=  Spring Security iterates through the filter chain in order.
+=  Your filter executes before the default UsernamePasswordAuthenticationFilter.
+
+
+>> JwtAuthenticationFilter extends OncePerRequestFilter
+  
+>  What is OncePerRequestFilter & why we extends in JwtAuthenticationFilter ?
+=  OncePerRequestFilter is an abstract class provided by Spring.
+=  Its main purpose: ensure that your filter logic runs only once per HTTP request, even if the request goes through 
+   multiple internal forwards or includes inside the server.
+=  (runs only once per HTTP request) means 1 Get or 1 Post it call only one time means 1 time check for every request
+
+
+>> JwtAuthenticationFilter class code
+
+= we have have 2 (if condition) Check
+  1st Check checks the header. User token is correct or not by call Jwt Util methods jwtTokenUtil.getUsernameFromToken(jwt) & it call getClaimFromToken(token,    
+  Claims::getSubject) it check format(signature)/expiry.Also extract email(depend on how we create token)
+  2nd Check Set Security Context for new request  (if we dont set security context Every request that is not matched by permitAll() 
+  must have a non-null, authenticated object in the SecurityContext.  Sees null → says “not authenticated.” Result: HTTP 401 Unauthorized.
+
+= Inside 2(IF Condition) check we call loadUserByUsername(email) it extract userInfo like name,pass,role 
+  We inherit UserDetailsService class provide by spring which have loadUserByUsername()  to override this method for custom logic
+
+>> What is getClaimFromToken(token, Claims::getSubject) ?
+   It is used to check token is correct or not
+   We use this method it is extract header + payload from token and generate signature by our app secret key 
+    and match that signature with current token signature which user provide after login( payload make token different & signature is generate with
+    header and payload so every signature is different ) 
+
+
+>> Request Chain 
+
+Incoming Request
+   ↓
+Security Filters (your JWT filter runs here & other filter runs)
+   ↓
+Authorization rules (permitAll / anyRequest().authenticated)
+   ↓
+Controller (if allowed)
+ 
+
+ 
+>> What happens when a user calls a protected API without a token?
+= JwtAuthenticationFilter runs 
+  authHeader not have Authorization key → skip JWT validation.
+  No authentication is set in SecurityContext.
+= Request continues down the chain
+  UsernamePasswordAuthenticationFilter also skips (it only call when we use form login security).
+= then Spring Security checks authorization rules
+  /user/profile is not in the permitAll list.
+  SecurityContext has no authenticated user.
+  Access decision 401 UnAuthorized exception throw
+
+
+>> What happens when a user calls a protected API with a token?
+= JwtAuthenticationFilter runs 
+  authHeader have Authorization key than in 1st check check token is not expiry & valid 
+  if not valid throw exception & if valid check 2 check create auth object by call loaduserbyuserNAme() & set in security context
+= Request continues down the chain
+  UsernamePasswordAuthenticationFilter also skips (it only call when /login api hits so in out there is no /login we have api/login).
+= then Spring Security checks authorization rules & Now Spring Security knows the user is authenticated because security context is not null
+= then Request go to controller
+  
+
+>> What happen when user call login api to create a token?
+= JwtAuthenticationFilter runs  → No Bearer token skip JWT validation. PASS
+= UsernamePasswordAuthenticationFilter also skips (it only call when we use form login security).
+= Then Spring Security checks authorization rules in security config
+  auth/login is permit All
+= Request Go to controller call service
+  we directly check the database for the password & OTP.
+  then create userDetail object by calling loaduserbyuserName() method 
+  then create auth object for set into SecurityContextHolder.
+  which tell this request is authenticate to spring 
+IMP => but it is not compulsory to set auth object in security context in /login endpoint You might call other secured methods or services
+ inside the same /auth/login request that require authentication/authorization.
+= service Last step it generate and return JWT Token 
+ 
+
+Q- What is Principle object & how to get current login user details?
+= When a request is authenticated, Spring stores an Authentication object inside the SecurityContext. 
+= That Authentication object has a getPrincipal() method:
+= Authentication authentication = SecurityContextHolder
+                                   .getContext()
+                                   .getAuthentication();
+= Object principal = authentication.getPrincipal();
+= This principal is the identity of the logged-in user.
+
+Q What is DaoAuthenticationProvider ?
+DaoAuthenticationProvider compares the stored encrypted password with the submitted password (using the right PasswordEncoder). If valid, an Authentication object is created and stored in the SecurityContext.
+IMP - IN normal flow like login form() ,JDBC ,INMEMORY not in jwt.
+
+
+Q What is UserDetailsService and Why we use?
+= We implement UserDetailsService because Spring Security needs a plug-in point to:
+= Look up a user by their login name (loadUserByUsername()),
+= Return a UserDetails object with username, encrypted password, and roles.
+= Without it, Spring Security wouldn’t know how to fetch user credentials from your custom database or service.
+= For normal security we not implement this class DaoAuthenticationProvider call bydefault UserDetailsService to load user data
+
+
+Q Normal Spring Security Flow & how its different from jwt flow?
+   When hit protected Api
+1️⃣ Request for a Protected Resource
+   Browser calls a URL that is protected by Spring Security, e.g. /dashboard.
+   SecurityFilterChain intercepts the request.
+   SecurityContextHolder is checked. if hit protected api if for login api its not check.
+2️⃣ Redirect to Login Page
+    The ExceptionTranslationFilter sees AccessDenied and redirects the browser to /login (the default login page) or your 
+     custom page.
+3️⃣ User Submits the Login Form
+   Browser POSTs to /login with username and password.
+   UsernamePasswordAuthenticationFilter catches this POST before it reaches your controllers.
+4️⃣ Create an Unauthenticated Token
+   The filter builds a UsernamePasswordAuthenticationToke
+   It passes that to the AuthenticationManager.
+5️⃣ DaoAuthenticationProvider Validates & set security context
+
+// If user hit /login api than
+ SecurityFilterChain intercepts the request.
+ Builds an unauthenticated UsernamePasswordAuthenticationToken with raw username/password.
+ Passes it to AuthenticationManager → DaoAuthenticationProvider.
+ DaoAuthenticationProvider:
+ Calls UserDetailsService.loadUserByUsername(username)
+ Validates password with PasswordEncoder
+ Creates authenticated token if valid.
+ SecurityContextHolder is populated and saved in session.
+   
+
+Q Session based(normal security ) VS Stateless Security(Jwt)
+
+Normal Spring security
+Client sends credentials (username/password) to /login.
+Spring Security authenticates and creates an HTTP session.
+A JSESSIONID cookie is sent to the browser.
+For every subsequent request, the browser automatically sends that cookie.
+Spring looks up the session in a server-side store and retrieves the SecurityContext (user details, roles, etc.).
+
+JWT
+Client sends credentials to /login (or /auth/token).
+Server returns a JWT or opaque token.
+Client stores token (e.g., in memory or local storage).
+Each request includes Authorization: Bearer <token>.
+Server does not store any session. It validates the token signature and builds the SecurityContext on every request.
+
+
+
+
+
+How to configre jwt in InvestoCafe
+=========================================
+
+Security Config file
+
+package com.divergent.investocafe.config;
+
+import com.divergent.investocafe.filter.JwtAuthenticationFilter;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class SecurityConfig {
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+
+    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
+        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http.cors(cors->{}).csrf(AbstractHttpConfigurer::disable)
+        .httpBasic(AbstractHttpConfigurer::disable)
+        .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .authorizeHttpRequests(auth -> auth
+                        .requestMatchers( "/auth/**",
+                                "/v3/api-docs/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html").permitAll()
+                        .anyRequest().authenticated())
+        .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
+        return http.build();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
+    }
+
+    // @Bean
+    // public CorsConfigurationSource corsConfigurationSource() {
+    //     CorsConfiguration configuration = new CorsConfiguration();
+    //     configuration.setAllowedOrigins(Arrays.asList("*"));
+    //     configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+    //     configuration.setAllowedHeaders(Arrays.asList("*"));
+    //     configuration.setAllowCredentials(true);
+    //     UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+    //     source.registerCorsConfiguration("/**", configuration);
+    //     return source;
+    // }
+}
+
+/login api hit
+======================
+
+    public ResponseEntity<?> loginUser(LoginRequestDto loginRequestDto) {
+        logger.debug("Login attempt for email: {}", loginRequestDto.getEmail());
+        String email = loginRequestDto.getEmail();
+        String password = loginRequestDto.getPassword();
+        String otp = loginRequestDto.getOtp();
+
+        // Step 1: Find user by email
+        Optional<User> existingUserOpt = userRepository.findByEmail(email);
+        if (existingUserOpt.isEmpty()) {
+            logger.debug("Login failed: user not found for email: {}", loginRequestDto.getEmail());
+            throw new GenericException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password");
+        }
+        User existingUser = existingUserOpt.get();
+        if (existingUser.getEmailStatus() == 0) {
+            throw new GenericException(HttpStatus.CONFLICT.value(),
+                    "Email not verified , Please Verify Email than try to login .");
+        }
+
+        // Step 2: Fetch password from user_password table
+        Optional<UserPassword> passwordOptional = userPasswordRepository.findTopByUserIdOrderByCreatedAtDesc(existingUser.getId());
+        if (passwordOptional.isEmpty()) {
+            logger.debug("Login failed: password not set for userId: {}", existingUser.getId());
+            throw new GenericException(HttpStatus.UNAUTHORIZED.value(), "Password not set for this user");
+        }
+
+        String encodedPassword = passwordOptional.get().getPassword();
+
+        // Step 3: Match entered password with stored encoded password
+        if (!passwordEncoder.matches(password, encodedPassword)) {
+            logger.debug("Login failed: invalid password for email: {}", loginRequestDto.getEmail());
+            throw new GenericException(HttpStatus.UNAUTHORIZED.value(), "Invalid email or password");
+        }
+        logger.debug("Login successful for email: {}", loginRequestDto.getEmail());
+
+        // Find OTP for user
+        Optional<UserOtp> userOtpOpt = userOtpRepository.findByUserId(existingUser.getId());
+
+        if (userOtpOpt.isEmpty() || !userOtpOpt.get().getOtpCode().equals(otp)) {
+            throw new GenericException(HttpStatus.UNAUTHORIZED.value(), "Invalid OTP");
+        }
+
+        UserOtp userOtp = userOtpOpt.get();
+
+        if (userOtp.getOtpExpiryTime().isBefore(LocalDateTime.now())) {
+            throw new GenericException(HttpStatus.UNAUTHORIZED.value(), "OTP expired");
+        }
+
+        // Step 4: Authenticate and generate token
+        UserDetails userDetails = userDetailsService.loadUserByUsername(email);
+
+        // Set Authentication in SecurityContext
+        UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(userDetails,
+                null, userDetails.getAuthorities());
+        SecurityContextHolder.getContext().setAuthentication(authenticationToken);
+
+        String token = jwtTokenUtil.generateToken(userDetails, existingUser.getEmail());
+
+        // return ResponseEntity.ok(Map.of("token", token));
+
+        return ResponseEntity.ok(new GlobalResponse<Map<String, String>>(HttpStatus.OK.value(), "Login successfull",
+                Map.of("token", token,
+                        "name", existingUser.getUsername(),
+                        "email", existingUser.getEmail(),
+                        "role", existingUser.getRole()
+                )));
+    }
+
+
+
+User Details Class
+==================
+package com.divergent.investocafe.service.impl;
+
+import com.divergent.investocafe.entity.User;
+import com.divergent.investocafe.entity.UserPassword;
+import com.divergent.investocafe.exceptions.customExceptions.GenericException;
+import com.divergent.investocafe.repositories.UserPasswordRepository;
+import com.divergent.investocafe.repositories.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.stereotype.Service;
+
+import java.util.Collections;
+import java.util.Optional;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+@Service
+public class UserDetailsServiceImpl implements UserDetailsService {
+    private static final Logger logger = LoggerFactory.getLogger(UserDetailsServiceImpl.class);
+    private UserRepository userRepository;
+
+    private UserPasswordRepository userPasswordRepository;
+
+    @Autowired
+    UserDetailsServiceImpl(UserRepository userRepository, UserPasswordRepository userPasswordRepository) {
+        this.userRepository = userRepository;
+        this.userPasswordRepository = userPasswordRepository;
+    }
+
+
+    @Override
+    public UserDetails loadUserByUsername(String email) throws UsernameNotFoundException {
+        Optional<User> userOpt = userRepository.findByEmail(email);
+        if(userOpt.isEmpty()){
+            throw new GenericException(HttpStatus.NOT_FOUND.value() , "Token Error - User not found with email : " + email);
+
+        }
+
+        User user = userOpt.get();
+        
+        UserPassword userPassword = userPasswordRepository.findTopByUserIdOrderByCreatedAtDesc(user.getId())
+                .orElseThrow(() -> new GenericException(HttpStatus.NOT_FOUND.value() , "Token Error - Password not found for user"));
+
+        logger.debug("User details loaded for email: {}", email);
+        return org.springframework.security.core.userdetails.User
+                .withUsername(user.getEmail())
+                .password(userPassword.getPassword())
+                .authorities(Collections.singletonList(new SimpleGrantedAuthority(user.getRole())))
+                .build();
+    }
+
+} 
+
+
+
+Jwt Filter class
+================
+
+package com.divergent.investocafe.filter;
+
+import com.divergent.investocafe.utils.JwtTokenUtil;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.NonNull;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+
+@Component
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private final JwtTokenUtil jwtTokenUtil;
+    private final UserDetailsService userDetailsService;
+
+    @Autowired
+    public JwtAuthenticationFilter(JwtTokenUtil jwtTokenUtil, UserDetailsService userDetailsService) {
+        this.jwtTokenUtil = jwtTokenUtil;
+        this.userDetailsService = userDetailsService;
+    }
+
+    @Override
+    protected void doFilterInternal(@NonNull HttpServletRequest request,
+                                    @NonNull HttpServletResponse response,
+                                    @NonNull FilterChain filterChain)
+            throws ServletException, IOException {
+
+        final String authHeader = request.getHeader("Authorization");
+        String email = null;
+        String jwt = null;
+
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            jwt = authHeader.substring(7);
+
+            try {
+                // ✅ Extract username from token
+                email = jwtTokenUtil.getUsernameFromToken(jwt);
+
+            } catch (ExpiredJwtException ex) {
+                // ❌ Token expired → return 401
+                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                response.getWriter().write("Unauthorized: Token expired");
+                return;
+
+            } catch (JwtException | IllegalArgumentException ex) {
+                // ❌ Invalid token → return 403
+                response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                response.getWriter().write("Forbidden: Invalid token");
+                return;
+            }
+        }
+
+        // ✅ If valid username and no authentication set, authenticate user
+        if (email != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            UserDetails userDetails = userDetailsService.loadUserByUsername(email);
+
+            if (jwtTokenUtil.validateToken(jwt, userDetails)) {
+                UsernamePasswordAuthenticationToken authToken =
+                        new UsernamePasswordAuthenticationToken(
+                                userDetails, null, userDetails.getAuthorities());
+                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+                SecurityContextHolder.getContext().setAuthentication(authToken);
+            }
+        }
+
+        filterChain.doFilter(request, response);
+    }
+}
+
+
+JWT UTILS Class
+================
+
+package com.divergent.investocafe.utils;
+
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.stereotype.Component;
+
+import com.divergent.investocafe.exceptions.customExceptions.GenericException;
+
+import javax.crypto.SecretKey;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Function;
+
+@Component
+public class JwtTokenUtil {
+	private final SecretKey secretKey;
+	private final long jwtExpirationMs;
+
+	public JwtTokenUtil(@Value("${jwt.secret}") String secret, @Value("${jwt.expiration}") long jwtExpirationMs) {
+		this.secretKey = Keys.hmacShaKeyFor(secret.getBytes());
+		this.jwtExpirationMs = jwtExpirationMs;
+	}
+
+	public String getUsernameFromToken(String token) {
+		return getClaimFromToken(token, Claims::getSubject);
+	}
+
+	public Date getExpirationDateFromToken(String token) {
+		return getClaimFromToken(token, Claims::getExpiration);
+	}
+
+	public <T> T getClaimFromToken(String token, Function<Claims, T> claimsResolver) {
+		final Claims claims = getAllClaimsFromToken(token);
+		return claimsResolver.apply(claims);
+	}
+
+	private Claims getAllClaimsFromToken(String token) {
+		return io.jsonwebtoken.Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token).getPayload();
+	}
+
+	private Boolean isTokenExpired(String token) {
+		final Date expiration = getExpirationDateFromToken(token);
+		return expiration.before(new Date());
+	}
+
+	// public String generateToken(UserDetails userDetails) {
+	// Map<String, Object> claims = new HashMap<>();
+	// return doGenerateToken(claims, userDetails.getUsername());
+	// }
+	//
+	// private String doGenerateToken(Map<String, Object> claims, String subject) {
+	// return io.jsonwebtoken.Jwts.builder()
+	// .claims(claims)
+	// .subject(subject)
+	// .issuedAt(new Date(System.currentTimeMillis()))
+	// .expiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
+	// .signWith(secretKey, Jwts.SIG.HS256)
+	// .compact();
+	// }
+
+	public String generateToken(UserDetails userDetails, String email) {
+		return doGenerateToken(new HashMap<>(), email);
+	}
+
+	private String doGenerateToken(Map<String, Object> claims, String subject) {
+		claims.put("profile_completed", false);
+		return Jwts.builder()
+				.claims(claims)
+				.subject(subject)
+				.issuedAt(new Date(System.currentTimeMillis()))
+				.expiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
+				.signWith(secretKey, Jwts.SIG.HS256)
+				.compact();
+	}
+
+	public Boolean validateToken(String token, UserDetails userDetails) {
+		final String username = getUsernameFromToken(token);
+		if(Boolean.TRUE.equals(isTokenExpired(token)))
+		{
+			throw new GenericException(HttpStatus.BAD_REQUEST.value() , "token Expired");
+		}
+		return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+	}
+}
+
+
+
+
+
+
+
+
+
